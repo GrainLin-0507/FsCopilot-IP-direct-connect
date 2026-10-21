@@ -1,4 +1,4 @@
-﻿namespace FsCopilot.ViewModels;
+namespace FsCopilot.ViewModels;
 
 using System.Collections.ObjectModel;
 using System.Reactive;
@@ -74,6 +74,34 @@ public class MainViewModel : ReactiveObject, IDisposable
     public string PeerId { get; init; }
     public string ClientName { get; init; }
 
+    /// <summary>True when the patched "type the partner's IP" mode is active.</summary>
+    public bool IsDirectMode { get; }
+    public string ConnectionHint { get; }
+    public string NetworkNote { get; }
+    public string ListenInfo { get; }
+
+    private bool _firewallReady;
+    public bool FirewallReady
+    {
+        get => _firewallReady;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _firewallReady, value);
+            this.RaisePropertyChanged(nameof(FirewallWarning));
+        }
+    }
+
+    private string _firewallStatus = string.Empty;
+    public string FirewallStatus
+    {
+        get => _firewallStatus;
+        private set => this.RaiseAndSetIfChanged(ref _firewallStatus, value);
+    }
+
+    public bool FirewallWarning => IsDirectMode && !FirewallReady;
+
+    public ReactiveCommand<Unit, Unit> FixFirewallCommand { get; }
+
     public string Version => App.Version;
     public string ErrorMessage =>
         _errors.HasFlag(ViewErrors.Failed) ? "Failed to connect." :
@@ -97,10 +125,32 @@ public class MainViewModel : ReactiveObject, IDisposable
         SimClient sim,
         MasterSwitch masterSwitch,
         Coordinator coordinator,
-        Updater updater)
+        Updater updater,
+        NetworkConfig config,
+        FirewallState firewall)
     {
         ClientName = name;
         PeerId = peerId;
+
+        IsDirectMode = config.Direct;
+        ConnectionHint = IsDirectMode ? "Partner IP" : "Client code";
+        NetworkNote = IsDirectMode
+            ? $"Direct mode: no server used. The partner only needs your IP (port {config.DirectPort} is used automatically)."
+            : "Note: Make sure that all clients see each other after connecting.";
+        ListenInfo = IsDirectMode
+            ? $"Listening on UDP {((net as DirectNetwork)?.Port ?? config.DirectPort)} | local: {NetworkConfig.LocalAddresses()}"
+            : string.Empty;
+
+        _firewallReady = firewall.Ready || !IsDirectMode;
+        _firewallStatus = firewall.Status;
+
+        FixFirewallCommand = ReactiveCommand.CreateFromTask(async () =>
+        {
+            var state = await Task.Run(() => Firewall.Ensure(config.DirectPort)).ConfigureAwait(true);
+            FirewallStatus = state.Status;
+            FirewallReady = state.Ready;
+            Log.Information("[Firewall] manual retry: {Ready} {Status}", state.Ready, state.Status);
+        });
 
         sim.Aircraft
             .ObserveOn(RxApp.MainThreadScheduler)
@@ -203,7 +253,11 @@ public class MainViewModel : ReactiveObject, IDisposable
         JoinCommand = ReactiveCommand.CreateFromTask(async () =>
         {
             if (IsBusy) return;
-            if (ConnectionCode.Length != 8) return;
+
+            var target = ConnectionCode.Trim();
+
+            // Direct mode accepts "ip", "ip:port" or "host:port"; otherwise it is the 8-letter client code.
+            if (IsDirectMode ? target.Length < 3 : target.Length != 8) return;
 
             Errors &= ~ViewErrors.Failed;
             IsBusy = true;
@@ -213,7 +267,7 @@ public class MainViewModel : ReactiveObject, IDisposable
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
 
                 masterSwitch.Join();
-                result = await net.Connect(ConnectionCode, cts.Token);
+                result = await net.Connect(target, cts.Token);
             }
             finally
             {

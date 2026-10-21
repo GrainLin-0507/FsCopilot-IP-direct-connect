@@ -110,12 +110,30 @@
                                 IsEnabled="{Binding IsBusy, Converter={StaticResource Inverse}}" />
                         <TextBox Classes="Connect"
                                  IsEnabled="{Binding IsBusy, Converter={StaticResource Inverse}}"
-                                 Watermark="Client code"
+                                 Watermark="{Binding ConnectionHint}"
                                  Text="{Binding ConnectionCode}" />
                     </DockPanel>
 
                     <TextBlock Classes="Note"
-                               Text="Note: Make sure that all clients see each other after connecting." />
+                               IsVisible="{Binding IsDirectMode}"
+                               TextWrapping="Wrap"
+                               Text="{Binding ListenInfo}" />
+
+                    <TextBlock Classes="Note"
+                               TextWrapping="Wrap"
+                               Text="{Binding NetworkNote}" />
+
+                    <DockPanel IsVisible="{Binding FirewallWarning}">
+                        <Button DockPanel.Dock="Right"
+                                Classes="TakeControl"
+                                Margin="8,0,0,0"
+                                Content="Fix"
+                                Command="{Binding FixFirewallCommand}" />
+                        <TextBlock Classes="Note ErrorNote"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding FirewallStatus}" />
+                    </DockPanel>
                 </StackPanel>
             </Border>
 

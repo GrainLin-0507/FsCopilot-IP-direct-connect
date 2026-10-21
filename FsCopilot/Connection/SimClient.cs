@@ -22,6 +22,18 @@ public class SimClient : IDisposable
     private int _rrIndex;
     private uint _defId = 100;
     private uint _requestId = 100;
+    /// <summary>
+    /// "1.2" and "1.2.1" are the same protocol line; "1.3" would not be.
+    /// </summary>
+    private static bool IsBridgeCompatible(string reported)
+    {
+        var actual = (reported ?? string.Empty).Split('.');
+        var expected = WasmVersion.Split('.');
+        if (actual.Length < 2 || expected.Length < 2) return false;
+
+        return actual[0] == expected[0] && actual[1] == expected[1];
+    }
+
     private readonly IObservable<string> _hEvents;
     private readonly IObservable<bool> _conflict;
     private readonly BehaviorSubject<BehaviorControl> _control = new(BehaviorControl.Master);
@@ -70,9 +82,21 @@ public class SimClient : IDisposable
         WasmReady = wasmVersion
             .Select(v => !string.IsNullOrWhiteSpace(v));
 
+        // Bridge compatibility is checked per minor version: the shipped bridge may report
+        // "1.2", "1.2.1" or a newer patch build of the same protocol line, all of which work.
+        // A different major.minor means the wire format changed, which is what the check is for.
+        // The version is re-sent once a second, so log it only when it changes.
+        var reportedVersion = string.Empty;
         WasmVersionMismatch = wasmVersion
             .Where(v => !string.IsNullOrWhiteSpace(v))
-            .Select(v => !v.Equals(WasmVersion));
+            .Do(v =>
+            {
+                if (v == reportedVersion) return;
+                reportedVersion = v;
+                Log.Information("[WASM] reported bridge version '{Version}' (compatible: {Compatible})",
+                    v, IsBridgeCompatible(v));
+            })
+            .Select(v => !IsBridgeCompatible(v));
 
         Observable.Interval(TimeSpan.FromMilliseconds(200))
             .WithLatestFrom(_control, (_, control) => control)
